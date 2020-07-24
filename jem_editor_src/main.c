@@ -44,7 +44,7 @@
 #define INIT_BUF {NULL,0}
 #define ROW_MARKER_S "~"
 #define ROW_MARKER_C '~'
-#define VERSION_NUMBER "0.1"
+#define VERSION_NUMBER "0.3"
 #define TAB_SIZE 3
 #define WELCOME_MESSAGE "COMMANDS: Ctrl-Q = quit *** Ctrl-S = save. *** Ctrl-F = search the file. "
 #define WELCOME_MESSAGE_LENGTH 150

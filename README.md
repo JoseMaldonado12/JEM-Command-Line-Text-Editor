@@ -16,7 +16,7 @@ and changed (from the guide) by me, thus I will refer to this as "my" text edito
 This is meant more as a personal project of mine rather than an outright "competitor" to something like vim, nano, sublime, emacs, etc. However,
 this text editor is very very capable. So much so that this programs source code, as of now, is being written in the JEM text editor. Wild! 
 As of now, the basic features of these includes *saving and loading files, opening existing files,creating new files from scratch,
-line count, and current line tracker.*
+line count, current line tracker, and iterative search.*
 
 ## How to use:
 Use this as you would basically any other text editor, running it as "jem" will bring up a blank text file, "jem txt" will open any text file
