@@ -1,0 +1,34 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/cygdrive/c/Users/Jose Maldonado/Desktop/classes hw/summer2020 pro/c notepad/main.c
+unistd.h
+-
+termios.h
+-
+stdlib.h
+-
+ctype.h
+-
+stdio.h
+-
+errno.h
+-
+sys/ioctl.h
+-
+string.h
+-
+sys/types.h
+-
+time.h
+-
+stdarg.h
+-
+fcntl.h
+-
+

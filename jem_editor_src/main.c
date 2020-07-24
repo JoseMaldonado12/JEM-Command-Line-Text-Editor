@@ -46,7 +46,7 @@
 #define ROW_MARKER_C '~'
 #define VERSION_NUMBER "0.1"
 #define TAB_SIZE 3
-#define WELCOME_MESSAGE "COMMANDS: Ctrl-Q = quit *** Ctrl-S = save. This message will disappear in 5 seconds after a key is pressed. "
+#define WELCOME_MESSAGE "COMMANDS: Ctrl-Q = quit *** Ctrl-S = save. *** Ctrl-F = search the file. "
 #define WELCOME_MESSAGE_LENGTH 150
 #define PRESS_KEY_THIS_MANY_TIMES_TO_QUIT 1 //(plus add one)
 #define ESCAPE '\x1b'
@@ -105,7 +105,7 @@ enum keys{
 /**** functions ****/
 void echo_off();
 void echo_on();
-void kill( const char *e);
+void destroy( const char *e);
 int catch_throw_key();
 void catch_and_process();
 void screen_wipe();
@@ -121,6 +121,7 @@ void insertrow(int index,char *s, size_t size);
 void scrolling();
 void updaterow(edirow *row);
 int calc_tab_offset(edirow *row, int current_cursor_x);
+int reverse_calc_tab_offset(edirow *row, int tabbed_cursor);
 void statusbar(struct wbuf *buffer);
 void set_status_message(const char *fmt, ...);
 void message_bar(struct wbuf *buffer);
@@ -134,7 +135,11 @@ void del_row(int index);
 void free_row(edirow *row);
 void row_append_s(edirow *row, char *s, size_t len);
 void insert_nwln();
-char *edi_prompt(char* prompt);
+char *edi_prompt(char *prompt, void (*callback)(char *, int));
+void search();
+void search_callback(char *query, int key);
+
+
 
 /**** appending to write()****/
 void wappend(struct wbuf *buf, const char *s, int size) {
@@ -155,7 +160,7 @@ void echo_off(){
 
     //once this is finished turn echo back on
     if (tcgetattr(STDIN_FILENO, &cf.og) == -1)
-        kill("tcgetattr");//just in case
+        destroy("tcgetattr");//just in case
 
     atexit(echo_on);
     //make a copy of the original termios
@@ -186,12 +191,12 @@ void echo_off(){
 
 
     if(tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw)== -1)
-        kill("tcsetattr"); //just in case
+        destroy("tcsetattr"); //just in case
 }
 
 void echo_on(){
         if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &cf.og)==-1)
-            kill("tcsetattr");//just in case
+            destroy("tcsetattr");//just in case
 }
 
 int window_size(int *row, int *col){
@@ -210,7 +215,7 @@ int window_size(int *row, int *col){
     }
 } //returns -1 in failure, 0 successful
 
-void kill(const char *e){
+void destroy(const char *e){
     //v below is used so as to not dump garbage on screen upon faulty exit
 
     //output an escape sequence to screen to clean the screen
@@ -289,7 +294,7 @@ int catch_throw_key() {
     int reading;
     while ((reading = read(STDIN_FILENO, &c, 1)) != 1) {
         if (reading == -1 && errno != EAGAIN)
-            kill("read");
+            destroy("read");
     }
 
     //if its an arrowkey treat it appropriately
@@ -420,6 +425,9 @@ void catch_and_process(){
             break;
         case CTRL_KEY('s'):
             save_file();
+            break;
+        case CTRL_KEY('f'):
+            search();
             break;
         //if it isnt a special char, insert it's raw data directly into buffer
         default:
@@ -559,7 +567,7 @@ void message_bar(struct wbuf *buffer){
     if (msgsize && time(NULL) - cf.status_message_time < 5)
         wappend(buffer, cf.status_message, msgsize);
 }
-char *edi_prompt(char* prompt){
+char *edi_prompt(char *prompt,void (*callback)(char *, int)){
 
     size_t buffer_size = 128;
     char *buf = malloc(buffer_size);
@@ -577,12 +585,16 @@ char *edi_prompt(char* prompt){
 
         }else if(c == ESCAPE) {
             set_status_message("");
+            if(callback)
+                callback(buf,c);
             free(buf);
             return NULL;
         } else if (c == '\r') {
             if (buffer_len != 0) {
                 // if there is user input and they have pressed enter, delete status message
                 set_status_message("");
+                if(callback)
+                    callback(buf,c);
                 return buf;
             }
         } else if (!iscntrl(c) && c < 128) {
@@ -593,6 +605,8 @@ char *edi_prompt(char* prompt){
             buf[buffer_len++] = c;
             buf[buffer_len] = '\0';
         }
+        if(callback)
+            callback(buf,c);
     }
 }
 
@@ -658,6 +672,19 @@ int calc_tab_offset(edirow *row, int current_cursor_x){
         ++current_tab_offset;
     }
     return current_tab_offset;
+}
+int reverse_calc_tab_offset(edirow *row, int tabbed_cursor){
+    int current_tab=0;
+    int i;
+    //iterates throught row, checks for tabs and returns early if there is one.
+    for(i=0;i<row->size; i++){
+        if(row->c[i] == '\t')
+            current_tab +=(TAB_SIZE-1) - (current_tab%TAB_SIZE);
+        ++current_tab;
+        if(current_tab > tabbed_cursor)
+            return i;
+    }
+    return i;
 }
 void row_insert_char(edirow *row, int index, int c){
     if (index < 0 || index > row->size)
@@ -762,7 +789,7 @@ void openfile(char *filename){
 
     //failsafe
     if (!fp)
-        kill("fopen");
+        destroy("fopen");
 
     char *line = NULL;
     size_t size = 0;
@@ -801,7 +828,7 @@ char *edirow_to_string(int *buffer_size){
 void save_file(){
 
     if(cf.filename == NULL) {
-        cf.filename = edi_prompt("Save as: %s ---Press ESC to cancel");
+        cf.filename = edi_prompt("Save as: %s ---Press ESC to cancel",NULL);
         if(cf.filename == NULL){
             set_status_message("Save cancelled. File not saved.");
             return;
@@ -836,6 +863,69 @@ void save_file(){
     set_status_message("Unable to save file. File error: %s", strerror(errno));
 }
 
+
+/**** search ****/
+void search(){
+    int current_cursorx=cf.cursorx;
+    int current_cursory=cf.cursory;
+    int current_col_offset=cf.col_offset;
+    int current_row_offset=cf.row_offset;
+    char *query = edi_prompt("Search: %s (ESC to cancel, Arrow keys to cycle through searches)", search_callback);
+
+    if(query)
+        free(query);
+    else{ //they pressed null, lets restore the original values
+        cf.cursorx =current_cursorx;
+        cf.cursory=current_cursory;
+        cf.col_offset=current_col_offset;
+        cf.row_offset=current_row_offset;
+    }
+
+}
+void search_callback(char *query, int key){
+    static int last_match_index = -1;
+    static int direction = 1; //1=searching forwards, -1=searching backwards
+
+    //check if they wanna leave search mode
+    if (key == '\r' || key == ESCAPE){
+        last_match_index=-1;
+        direction=1;
+        return;
+        //move from search results according to the buttons they press.
+    } else if(key==RIGHT || key==DOWN) {
+        direction = 1;
+    }else if(key==LEFT || key==UP) {
+        direction = -1;
+    }else{
+        last_match_index=-1;
+        direction=1;
+    }
+
+    if(last_match_index == -1)
+        direction=1;
+
+    int current_row_index=last_match_index;
+    int i;
+    //iterates through each row, then iterates through that row to find the matching string(s).
+    //if cycling through the same query, it will continue where it left off, otherwise its starts anew.
+    for(i=0; i<cf.rownum; i++){
+        current_row_index +=direction;
+        if(current_row_index == -1)
+            current_row_index=cf.rownum-1;
+        else if(current_row_index == cf.rownum)
+            current_row_index=0;
+
+        edirow *row= &cf.row[current_row_index];
+        char *found=strstr(row->render, query);
+        if(found){
+            last_match_index=current_row_index;
+            cf.cursory=current_row_index;
+            cf.cursorx=reverse_calc_tab_offset(row,found-row->render);
+            cf.row_offset= cf.rownum; //scrolls to bottom of file, forcing matching line to be top of screen
+            break;
+        }
+    }
+}
 /**** main ****/
 void init_edit(){
     //will initalize all values of the global struct
@@ -851,7 +941,7 @@ void init_edit(){
     cf.status_message_time = 0;
     cf.dirty_file =0;
     if (window_size(&cf.current_rows, &cf.current_cols) == -1)
-        kill("window_size");
+        destroy("window_size");
 
     //makes room on the final line for the status bar
     cf.current_rows-=2;
@@ -871,5 +961,4 @@ int main(int argc, char *argv[]){
         catch_and_process(); //dw it exits in function
         }
     return 0;
-
     }

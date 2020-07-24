@@ -1,0 +1,11 @@
+"C:\Users\Jose Maldonado\.CLion2019.2\system\cygwin_cmake\bin\cmake.exe" -DCMAKE_BUILD_TYPE=Debug -G "CodeBlocks - Unix Makefiles" "/cygdrive/c/Users/Jose Maldonado/Desktop/classes hw/summer2020 pro/c notepad"
+-- The C compiler identification is GNU 7.4.0
+-- Check for working C compiler: /usr/bin/cc
+-- Check for working C compiler: /usr/bin/cc -- works
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /cygdrive/c/Users/Jose Maldonado/Desktop/classes hw/summer2020 pro/c notepad/cmake-build-debug
