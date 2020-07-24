@@ -1,0 +1,1 @@
+/usr/bin/cc -g  -Wl,--enable-auto-import CMakeFiles/c_notepad.dir/main.c.o  -o c_notepad.exe -Wl,--out-implib,libc_notepad.dll.a -Wl,--major-image-version,0,--minor-image-version,0 
