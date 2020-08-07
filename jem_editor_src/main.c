@@ -44,12 +44,22 @@
 #define INIT_BUF {NULL,0}
 #define ROW_MARKER_S "~"
 #define ROW_MARKER_C '~'
-#define VERSION_NUMBER "0.4"
+#define VERSION_NUMBER "1.0"
 #define TAB_SIZE 3
-#define WELCOME_MESSAGE "COMMANDS: Ctrl-Q = quit *** Ctrl-S = save. *** Ctrl-F = search the file. "
+#define WELCOME_MESSAGE "COMMANDS: Ctrl-X = quit *** Ctrl-S = save. *** Ctrl-F = search the file. "
 #define WELCOME_MESSAGE_LENGTH 150
 #define PRESS_KEY_THIS_MANY_TIMES_TO_QUIT 1 //(plus add one)
 #define ESCAPE '\x1b'
+#define NORMAL_TEXT_COLOR 37 //white
+#define KEYWORD1_COLOR 33 //Yellow
+#define KEYWORD2_COLOR 32 // Green
+#define DIGIT_COLOR 31 //Red
+#define SEARCH_COLOR 34 //Blue
+#define STRING_COLOR 35 //Magenta
+#define COMMENT_COLOR 36 //Cyan
+#define HL_HIGHLIGHT_NUMBERS (1<<0)
+#define HL_HIGHLIGHT_STRINGS (1<<1)
+
 //used for portability purposes
 #define _DEFAULT_SOURCE
 #define _BSD_SOURCE
@@ -57,17 +67,18 @@
 
 
 /**** global vars ****/
-
-
 typedef struct edirow{
+    int index;
     int size;
     int render_size;
     char *render;
     char *c;
+    unsigned char *hl;
+    int hl_open_comment;
 
 } edirow;
-
 struct config {
+    struct word_syntax *syntax;
     struct termios og;
     int current_rows;
     int current_cols;
@@ -83,10 +94,19 @@ struct config {
     edirow *row;
 };
 struct config cf;
-
 struct wbuf {
     char *c;
     int size;
+};
+struct word_syntax{
+    char *filetype;
+    char **filematch;
+    char **keywords;
+    char *single_comment;
+    char *ml_comment_s;
+    char *ml_comment_e;
+    int flag;
+
 };
 
 enum keys{
@@ -101,6 +121,39 @@ enum keys{
     PG_UP,
     PG_DOWN
 };
+enum highlight{
+    HL_NORMAL=0,
+    HL_COMMENT,
+    HL_ML_COMMENT,
+    HL_KEYWORD1,
+    HL_KEYWORD2,
+    HL_STRING,
+    HL_NUMBER,
+    HL_MATCH
+};
+
+
+/**** filetypes ****/
+char *extensions[]={ ".c", ".h", ".cpp", NULL };
+char *C_keywords[] = {
+        "switch", "if", "while", "for", "break", "continue", "return", "else",
+        "struct", "union", "typedef", "static", "enum", "class", "case",
+        "int|", "long|", "double|", "float|", "char|", "unsigned|", "signed|",
+        "void|", NULL
+};
+struct word_syntax highlights[] ={
+        //rudimentary databse to store all extension and its respective color
+        {
+                "c",
+                extensions,
+                C_keywords,
+                "//","/*", "*/",
+                HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS
+        },
+};
+
+#define HIGHLIGHTS_ENTRIES (sizeof(highlights) / sizeof(highlights[0]))
+
 
 /**** functions ****/
 void echo_off();
@@ -138,6 +191,10 @@ void insert_nwln();
 char *edi_prompt(char *prompt, void (*callback)(char *, int));
 void search();
 void search_callback(char *query, int key);
+void update_syntax(edirow *row);
+int syntax_color(int hl);
+int is_seperate(int i);
+void select_syntax_hl();
 
 
 
@@ -149,7 +206,6 @@ void wappend(struct wbuf *buf, const char *s, int size) {
     buf->c = new;
     buf->size += size;
 }
-
 void destructor(struct wbuf *buf) {
     free(buf->c);
 }
@@ -193,12 +249,10 @@ void echo_off(){
     if(tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw)== -1)
         destroy("tcsetattr"); //just in case
 }
-
 void echo_on(){
         if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &cf.og)==-1)
             destroy("tcsetattr");//just in case
 }
-
 int window_size(int *row, int *col){
     struct winsize ws;
 
@@ -214,7 +268,6 @@ int window_size(int *row, int *col){
         return 0;
     }
 } //returns -1 in failure, 0 successful
-
 void destroy(const char *e){
     //v below is used so as to not dump garbage on screen upon faulty exit
 
@@ -279,7 +332,7 @@ void move_cursor(int move){
                 cf.cursory--;
             break;
         case DOWN:
-            if(cf.cursory < cf.rownum-1)
+            if(cf.cursory < cf.rownum)
                 cf.cursory++;
             break;
     }
@@ -360,10 +413,10 @@ void catch_and_process(){
     static int quit_num=PRESS_KEY_THIS_MANY_TIMES_TO_QUIT;
     int c= catch_throw_key();
 
-    if(c == CTRL_KEY('q')) {
+    if(c == CTRL_KEY('x')) {
         if(cf.dirty_file && quit_num >0){
             set_status_message("THE CURRENT FILE HAS UNSAVED CHANGES. "
-                                   "Press Ctrl-Q again to quit or save first.");
+                                   "Press Ctrl-X again to quit or save first.");
             --quit_num;
             return;
         }
@@ -394,12 +447,30 @@ void catch_and_process(){
         case PG_DOWN:
         case PG_UP:
         {
+
             if (c == PG_UP) {
-                cf.cursory = cf.row_offset;
+                //scroll one screen up cursor on top row
+                if(cf.cursory == cf.row_offset){
+                    cf.cursory = cf.row_offset-cf.current_rows+2;
+                    if(cf.cursory < 0)
+                        cf.cursory = 0;
+                } else{ //position cursor on top row
+                    cf.cursory = cf.row_offset;
+
+                }
+
             }else{
-                cf.cursory = cf.row_offset + cf.current_rows - 1;
-                if (cf.cursory > cf.rownum)
-                    cf.cursory = cf.rownum;
+                //scroll down one screen if cursor on bottom row
+                if(cf.cursory == cf.row_offset + cf.current_rows - 1){
+                    cf.cursory += cf.current_rows-2;
+                    if (cf.cursory > cf.rownum)
+                        cf.cursory = cf.rownum;
+                } else{//position cursor on bottom row
+                    cf.cursory = cf.row_offset + cf.current_rows - 1;
+                    if (cf.cursory > cf.rownum)
+                        cf.cursory = cf.rownum;
+                }
+
             }
         }
         break;
@@ -470,7 +541,43 @@ for(i=0; i<cf.current_rows; i++){
             size=0;
         if (size > cf.current_cols)
             size = cf.current_rows;
-        wappend(buf, &cf.row[filerow].render[cf.col_offset], size);
+        char *c = &cf.row[filerow].render[cf.col_offset];
+        unsigned char *hl = &cf.row[filerow].hl[cf.col_offset];
+        int current_color=-1;
+        int j;
+        //add substring render char by char to appropriately color it.
+        for(j=0; j<size; j++){
+            if (iscntrl(c[j])) { //prints out "unprintable" chars
+                char symbol = (c[j] <= 26) ? '@' + c[j] : '?';
+               wappend(buf, "\x1b[7m", 4);
+                wappend(buf, &symbol, 1);
+                wappend(buf, "\x1b[m", 3);
+                if (current_color != -1) {
+                    char tempbuf[16];
+                    int temp_size = snprintf(tempbuf, sizeof(tempbuf), "\x1b[%dm", current_color);
+                    wappend(buf, tempbuf, temp_size);
+                }
+            } else if (hl[j] == HL_NORMAL) {
+                if(current_color != -1){
+                    wappend(buf, "\x1b[39m", 5);
+                    current_color=-1;
+                }
+
+                wappend(buf, &c[j], 1);
+            } else {
+                int color = syntax_color(hl[j]);
+                //optimization; only print escape char if color sequence changes.
+                if(color != current_color){
+                    current_color = color;
+                    char buffer[16];
+                    int color_size= snprintf(buffer, sizeof(buffer), "\x1b[%dm", color);
+                    wappend(buf, buffer, color_size);
+                }
+
+                wappend(buf, &c[j], 1);
+            }
+        }
+        wappend(buf,"\x1b[39m", 5);
     }
     //puts sequence after every line we draw to make it look nicer
     wappend(buf,"\x1b[K", 3);
@@ -535,7 +642,8 @@ void statusbar(struct wbuf *buffer){
     int size = snprintf(status, sizeof(status), "%.20s - %d lines %s",
             cf.filename ? cf.filename : "{Name Missing}", cf.rownum,
             cf.dirty_file ? "(modified)" :  "");
-    int line_num_size = snprintf(line_num, sizeof(line_num), "%d/%d",cf.cursory + 1, cf.rownum);
+    int line_num_size = snprintf(line_num, sizeof(line_num), "%s | %d/%d",
+            cf.syntax? cf.syntax->filetype : "no filetype", cf.cursory + 1, cf.rownum);
     if (size > cf.current_cols)
         size = cf.current_cols;
     wappend(buffer, status, size);
@@ -620,9 +728,12 @@ void insertrow(int index,char *s, size_t size) {
     cf.row = realloc(cf.row, sizeof(edirow) * (cf.rownum + 1));
     //make room at the specified index
     memmove(&cf.row[index + 1], &cf.row[index], sizeof(edirow) * (cf.rownum - index));
+    int i;
+    for (i= index + 1; i <= cf.rownum; i++)
+        cf.row[i].index++;
 
 
-
+    cf.row[index].index = index;
     cf.row[index].size=size;
     cf.row[index].c = malloc(size + 1);
     memcpy(cf.row[index].c, s, size);
@@ -630,6 +741,8 @@ void insertrow(int index,char *s, size_t size) {
 
     cf.row[index].render_size=0;
     cf.row[index].render=NULL;
+    cf.row[index].hl=NULL;
+    cf.row[index].hl_open_comment=0;
     updaterow(&cf.row[index]);
     ++cf.rownum;
     ++cf.dirty_file;
@@ -661,6 +774,7 @@ void updaterow(edirow *row){
     }
     row->render[index] = '\0';
     row->render_size = index;
+    update_syntax(row);
 }
 int calc_tab_offset(edirow *row, int current_cursor_x){
     int current_tab_offset=0;
@@ -715,12 +829,17 @@ void del_row(int index){
     free_row(&cf.row[index]);
     //overwrites the current, deleted line with the row after that.
     memmove(&cf.row[index], &cf.row[index + 1], sizeof(edirow) * (cf.rownum- index - 1));
+    int i;
+    for (i= index; i < cf.rownum - 1; i++)
+        cf.row[i].index++;
+
     --cf.rownum;
     ++cf.dirty_file;
 }
 void free_row(edirow *row){
     free(row->render);
     free(row->c);
+    free(row->hl);
 }
 void row_append_s(edirow *row, char *s, size_t len){
 
@@ -785,6 +904,8 @@ void insert_nwln(){
 void openfile(char *filename){
     free(cf.filename);
     cf.filename = strdup(filename);
+
+    select_syntax_hl();
     FILE *fp = fopen(filename, "r");
 
     //failsafe
@@ -833,6 +954,7 @@ void save_file(){
             set_status_message("Save cancelled. File not saved.");
             return;
         }
+        select_syntax_hl();
     }
 
     int size=0;
@@ -863,7 +985,6 @@ void save_file(){
     set_status_message("Unable to save file. File error: %s", strerror(errno));
 }
 
-
 /**** search ****/
 void search(){
     int current_cursorx=cf.cursorx;
@@ -885,6 +1006,15 @@ void search(){
 void search_callback(char *query, int key){
     static int last_match_index = -1;
     static int direction = 1; //1=searching forwards, -1=searching backwards
+
+    static int saved_hl_line;
+    static char *saved_hl =NULL;
+
+    if (saved_hl) {
+        memcpy(cf.row[saved_hl_line].hl, saved_hl, cf.row[saved_hl_line].render_size);
+        free(saved_hl);
+        saved_hl = NULL;
+    }
 
     //check if they wanna leave search mode
     if (key == '\r' || key == ESCAPE){
@@ -922,10 +1052,178 @@ void search_callback(char *query, int key){
             cf.cursory=current_row_index;
             cf.cursorx=reverse_calc_tab_offset(row,found-row->render);
             cf.row_offset= cf.rownum; //scrolls to bottom of file, forcing matching line to be top of screen
+
+            //restore the searched string back to its original color
+            saved_hl_line=current_row_index;
+            saved_hl=malloc(row->render_size);
+            memcpy(saved_hl, row->hl, row->render_size);
+
+            memset(&row->hl[found-row->render], HL_MATCH, strlen(query));
             break;
         }
     }
 }
+
+/**** text highlighting ****/
+void update_syntax(edirow *row){
+    row->hl = realloc(row->hl, row->render_size);
+    memset(row->hl, HL_NORMAL, row->render_size);
+
+    if(cf.syntax == NULL) return;
+
+    char **keywords = cf.syntax->keywords;
+    char *cs = cf.syntax->single_comment; //comment start
+    char *mlcss =cf.syntax->ml_comment_s; //multline comment size start
+    char *mlcse =cf.syntax->ml_comment_e; //multline comment size end
+
+    int cs_size = cs ? strlen(cs) : 0;
+    int mlcss_size = mlcss ? strlen(mlcss) : 0;
+    int mlcse_size = mlcse ? strlen(mlcse) : 0;
+
+    int prev_sep=1;
+    int in_string=0;
+    int in_comment = (row->index > 0 && cf.row[row->index - 1].hl_open_comment);
+    int i=0;
+    while( i<row->render_size){
+        char c= row->render[i];
+        unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;
+
+        //checks if its a comment, but not inside a multiline comment
+        if (cs_size && !in_string && !in_comment) {
+            if (!strncmp(&row->render[i], cs, cs_size)) {
+                memset(&row->hl[i], HL_COMMENT, row->render_size - i);
+                break;
+            }
+        }
+
+        //checks if its a multiline comment
+        if (mlcss_size && mlcse_size && !in_string) { //if they aint empty...
+            if (in_comment) {
+                row->hl[i] = HL_ML_COMMENT;
+                if (!strncmp(&row->render[i], mlcse, mlcse_size)) {
+                    memset(&row->hl[i], HL_ML_COMMENT, mlcse_size);
+                    i += mlcse_size;
+                    in_comment = 0;
+                    prev_sep = 1;
+                    continue;
+                } else {
+                    i++;
+                    continue;
+                }
+            } else if (!strncmp(&row->render[i], mlcss, mlcss_size)) { //checks for end of comment.
+                memset(&row->hl[i], HL_ML_COMMENT,mlcss_size);
+                i += mlcss_size;
+                in_comment = 1;
+                continue;
+            }
+        }
+
+        //checks if its inside a string
+        if(cf.syntax->flag & HL_HIGHLIGHT_STRINGS) {
+            if (in_string) {
+                row->hl[i] = HL_STRING;
+                if(c == '\\' && i+1 < row->size){
+                    row->hl[i + 1] = HL_STRING;
+                    i += 2; //skip over the '\\'
+                    continue;
+                }
+                if (c == in_string)
+                    in_string=0;
+                ++i;
+                prev_sep = 1;
+                continue;
+            } else{
+                if (c == '"' || c == '\'') {
+                    in_string = c;
+                    row->hl[i] = HL_STRING;
+                    ++i;
+                    continue;
+                }
+            }
+        }
+
+        //checks it as a digit
+        if (cf.syntax->flag & HL_HIGHLIGHT_NUMBERS) {
+            if ((isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) ||
+                (c == '.' && prev_hl == HL_NUMBER)) {
+                row->hl[i] = HL_NUMBER;
+                ++i;
+                prev_sep = 0;
+                continue;
+            }
+        }
+
+        //checks it as any C keyword
+        if (prev_sep) {
+            int j;
+            for (j = 0; keywords[j]; j++) {
+                int keywords_size = strlen(keywords[j]);
+                int kw2 = keywords[j][keywords_size - 1] == '|';
+                if (kw2) keywords_size--;
+                if (!strncmp(&row->render[i], keywords[j], keywords_size) &&
+                    is_seperate(row->render[i + keywords_size])) {
+                    memset(&row->hl[i], kw2 ? HL_KEYWORD2 : HL_KEYWORD1, keywords_size);
+                    i += keywords_size;
+                    break;
+                }
+            }
+            if (keywords[j] != NULL) {
+                prev_sep = 0;
+                continue;
+            }
+        }
+
+        prev_sep= is_seperate(c);
+        ++i;
+    }
+    int changed = (row->hl_open_comment != in_comment);
+    row->hl_open_comment = in_comment;
+
+    //recurses until there is no more unchanged lines.
+    if (changed && row->index + 1 < cf.rownum)
+        update_syntax(&cf.row[row->index + 1]);
+}
+int syntax_color(int hl){
+    switch(hl){
+        case HL_COMMENT:
+        case HL_ML_COMMENT: return COMMENT_COLOR;
+        case HL_KEYWORD1: return KEYWORD1_COLOR;
+        case HL_KEYWORD2: return KEYWORD2_COLOR;
+        case HL_STRING: return STRING_COLOR;
+        case HL_NUMBER: return DIGIT_COLOR;
+        case HL_MATCH: return SEARCH_COLOR;
+
+        default: return NORMAL_TEXT_COLOR;
+    }
+}
+int is_seperate(int i){
+    return isspace(i) || i == '\0' || strchr(",.()+-/*=~%<>[];", i) != NULL;
+}
+void select_syntax_hl(){
+    cf.syntax = NULL;
+    if(cf.filename == NULL) return; // no need to highligh filename
+
+    char *extension = strrchr(cf.filename, '.'); //get filenames extension
+    unsigned int j;
+    for(j = 0; j<HIGHLIGHTS_ENTRIES; j++){
+        struct word_syntax *s = &highlights[j];
+        unsigned int i = 0;
+        while (s->filematch[i]) {
+            int is_ext = (s->filematch[i][0] == '.');
+            if ((is_ext && extension && !strcmp(extension, s->filematch[i])) ||
+                (!is_ext && strstr(cf.filename, s->filematch[i]))) {
+                cf.syntax = s;
+                int filerow;
+                for (filerow = 0; filerow < cf.rownum; filerow++) {
+                    update_syntax(&cf.row[filerow]);
+                }
+                return;
+            }
+            i++;
+        }
+    }
+}
+
 /**** main ****/
 void init_edit(){
     //will initalize all values of the global struct
@@ -940,6 +1238,7 @@ void init_edit(){
     cf.status_message[0] = '\0';
     cf.status_message_time = 0;
     cf.dirty_file =0;
+    cf.syntax = NULL;
     if (window_size(&cf.current_rows, &cf.current_cols) == -1)
         destroy("window_size");
 
